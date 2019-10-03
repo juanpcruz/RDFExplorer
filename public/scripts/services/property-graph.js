@@ -1022,6 +1022,9 @@ function propertyGraphService (req, log, settings) {
             variable.query = q;
           });
         } else {
+          //Si no se obtienen resultados se buscan recomendaciones
+          self.generateRecommendation(cfg);
+
           self.select.forEach(r => {
             r.variable.results = [];
             r.variable.query = q;
@@ -1032,6 +1035,131 @@ function propertyGraphService (req, log, settings) {
     } else {
       if (cfg.callback) cfg.callback();
     }
+  }
+
+Query.prototype.generateRecommendation = function (config) {
+    this.triplesCopy = this.triples.slice();
+    this.qCopy = this.q.slice();
+    var self = this;
+    var cfg = config || {};
+    //Se captura el triple que esta generando el problema
+    var tripleArreglar;
+    var variable = this.select[0].variable.getName();
+    tripleArreglar = this.triples.filter(t => { return (t[0].variable.getName() == variable || t[1].variable.getName() == variable || t[2].variable.getName() == variable) })[0];
+    alert("Se recomienda modificar el triple: "+
+      tripleArreglar.map(r => {
+        if (r.isVariable()) return r.variable;
+        else {
+          return r.getUri().getLabel();
+        }
+      }).join(' ')
+    );
+    //Si el triple es de la forma ?s ?p o
+    if(getCase(tripleArreglar) == 1){
+      var recursoObj = tripleArreglar[2];
+      var queries = [];
+      recursoObj.variable.recommends = [];
+
+      //se agregan las queries a ejecutar para obtener posibles reemplazos 
+      queries.push(getSuperClasses(recursoObj.getUri()));
+      queries.push(getSubClasses(recursoObj.getUri()));
+      queries.push(getInstanceOf(recursoObj.getUri()));
+
+      var posibleRecommend = new RDFResource();
+      posibleRecommend.isVar = false;
+      posibleRecommend.cur = 0;
+      
+      queries.forEach(querieText => {
+        req.execQuery(querieText, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var values = new Set();
+            var possibleResource = [];
+            var name = 'v';
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            posibleRecommend.uris =[];
+            posibleRecommend.uris.push(possibleResource[0].value);
+            
+            //Por cada posible recomendacion, se modifica la consulta y se comprueba si entrega resultados
+            possibleResource.forEach(x => {
+              posibleRecommend.uris[0] = x.value;
+              tripleArreglar[2] = posibleRecommend;
+              q = self.get();
+              req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+                if (datas.results.bindings.length > 0){
+                  recursoObj.variable.recommends.push(x);
+                }
+              }});
+            });
+          } 
+        }});
+      });
+    }
+    this.triples = this.triplesCopy;
+    this.q = this.qCopy;
+  }
+
+  function getCase(triple) {
+    if (triple[0].isVariable()){
+      if(triple[1].isVariable()){
+        if(triple[2].isVariable()){
+          return 0;
+        }else{
+          return 1;
+        }
+      }else {
+        if(triple[2].isVariable()){
+          return 2;
+        }else{
+          return 3;
+        }
+      }
+    } else {
+      if(triple[1].isVariable()){
+        if(triple[2].isVariable()){
+          return 4;
+        }else{
+          return 5;
+        }
+      }else{
+        if(triple[2].isVariable()){
+          return 6;
+        }else{
+          return 7;
+        }
+      }
+    }
+  }
+
+  function getSuperClasses(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'SELECT DISTINCT ?v WHERE {\n' +
+            ' <' + uri +'> wdt:P279 ?v \n' +
+           '}';
+  }
+  function getSubClasses(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'SELECT DISTINCT ?v WHERE {\n' +
+            ' ?v wdt:P279 <' + uri +'> \n' +
+           '}';
+  }
+  function getInstanceOf(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+           'SELECT DISTINCT ?v WHERE {\n' +
+           '<' + uri + '> wdt:P31 ?v\n' +
+           '}';
+  }
+  function getEquivalentClass(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+           'SELECT DISTINCT ?v WHERE {\n' +
+           '<' + uri + '> wdt:P1709 ?v\n' +
+           '}';
+  }
+  function getExactMatch(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+           'SELECT DISTINCT ?v WHERE {\n' +
+           '<' + uri + '> wdt:P2888 ?v\n' +
+           '}';
   }
 
   return propertyGraph;

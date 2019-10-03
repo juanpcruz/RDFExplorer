@@ -35,6 +35,27 @@ div(ng-show="main.tool == 'edit'", ng-controller="EditCtrl as ctrl")
       input.form-check-input#prop-star(type="checkbox", ng-model="ctrl.selected.star", ng-change="ctrl.refresh()")
       label.form-check-label(for="prop-star") Wildcard property
 
+    //---------------------RECOMMENDS--------------------//
+    .custom-container-title.no-select.mt-2.clickable(
+        ) Recommends
+      span.ml-1(ng-if="ctrl.variable.filters.length > 0") [{{ctrl.variable.recommends.length}}]
+      i.pull-right.fa(ng-class="ctrl.showFilters ? 'fa-angle-up' : 'fa-angle-down';")
+    
+    .custom-container-content.active
+      .row(ng-repeat="elem in ctrl.variable.recommends", title="{{elem.value}}")
+        .col-md-12(ng-class="{'mt-1': $first}")
+          span.ell(style="width: calc(100% - 30px);")
+            a(ng-if="!ctrl.isLiteral", href="", ng-click="elem.value.describe()") {{ elem.value.getLabel(); }}
+            span(ng-if="ctrl.isLiteral") {{ elem.value }}
+          i.pull-right.fa.fa-plus.mr-1.mt-1.clickable(ng-click="ctrl.addValue(elem.value);")
+      //.row() add pagination here
+        .col-md-2.clickable
+          i.fa.fa-chevron-left
+        .col-md-8
+        .col-md-2.clickable
+          i.fa.fa-chevron-right
+
+
   //--------------------- VARIABLE ---------------------//
   div.mt-3(ng-if="ctrl.isVariable")
     form
