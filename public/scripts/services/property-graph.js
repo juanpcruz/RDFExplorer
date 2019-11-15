@@ -92,6 +92,7 @@ function propertyGraphService (req, log, settings) {
       this.id = 'var' + lastVarResId++;
     } else if (parent instanceof Property || parent instanceof Literal) {
       this.id = 'prop' + lastVarPropId++;
+      this.VarId = lastVarPropId - 1;
     } else {
       this.id = lastVarId++;
     }
@@ -1037,39 +1038,65 @@ function propertyGraphService (req, log, settings) {
     }
   }
 
+Query.prototype.getLastProperty = function(){
+  var propId;
+  var lastId = -1;
+  for(var i=0; i < this.triples.length; i++){
+    if (this.triples[i][1].variable.VarId > lastId){
+      lastId = this.triples[i][1].variable.VarId;
+      propId = this.triples[i][1].variable.id;
+    }
+  }
+  return propId;
+}
+
 Query.prototype.generateRecommendation = function (config) {
     this.triplesCopy = this.triples.slice();
     this.qCopy = this.q.slice();
+    this.selectCopy = this.select.slice();
+    this.optionalsCopy = this.optionals.slice();
     var self = this;
     var cfg = config || {};
     //Se captura el triple que esta generando el problema
-    var tripleArreglar;
-    var variable = this.select[0].variable.getName();
-    tripleArreglar = this.triples.filter(t => { return (t[0].variable.getName() == variable || t[1].variable.getName() == variable || t[2].variable.getName() == variable) })[0];
-    alert("Se recomienda modificar el triple: "+
-      tripleArreglar.map(r => {
-        if (r.isVariable()) return r.variable;
-        else {
-          return r.getUri().getLabel();
-        }
-      }).join(' ')
-    );
-    //Si el triple es de la forma ?s ?p o
-    if(getCase(tripleArreglar) == 1){
+    var propId = this.getLastProperty();
+    var tripleArreglar = this.triples.filter(t => {return t[1].variable.id == propId})[0];
+
+    var caso = getCase(tripleArreglar);
+    var textoTriple = tripleArreglar.map(r => {
+                        if (r.isVariable()) return r.variable;
+                        else {
+                          return r.getUri().getLabel();
+                        }
+                      }).join(' - ')
+    
+    if (caso==0){ //?x ?y z
+      alert("Se recomienda eliminar el triple: "+
+        tripleArreglar.map(r => {
+          if (r.isVariable()) return r.variable;
+          else {
+            return r.getUri().getLabel();
+          }
+        }).join(' ')
+      );
+    }else if(caso == 1){ //?x ?y o
+      alert("Se recomienda modificar " + tripleArreglar[2].getUri().getLabel() + " en triple " + textoTriple);
+
       var recursoObj = tripleArreglar[2];
       var queries = [];
       recursoObj.variable.recommends = [];
 
-      //se agregan las queries a ejecutar para obtener posibles reemplazos 
       queries.push(getSuperClasses(recursoObj.getUri()));
       queries.push(getSubClasses(recursoObj.getUri()));
       queries.push(getInstanceOf(recursoObj.getUri()));
+      queries.push(getHasPart(recursoObj.getUri()));
+      queries.push(getPartOf(recursoObj.getUri()));
+      queries.push(getNeighborsClass(recursoObj.getUri()));
 
       var posibleRecommend = new RDFResource();
       posibleRecommend.isVar = false;
       posibleRecommend.cur = 0;
       
-      queries.forEach(querieText => {
+      queries.forEach(querieText => { 
         req.execQuery(querieText, { canceller: cfg.canceller, callback: datas => {
           if (datas.results.bindings.length > 0) {
             var values = new Set();
@@ -1084,6 +1111,132 @@ Query.prototype.generateRecommendation = function (config) {
             possibleResource.forEach(x => {
               posibleRecommend.uris[0] = x.value;
               tripleArreglar[2] = posibleRecommend;
+
+              /*var tripleLabel = self.createTripleLabel(posibleRecommend);
+              alert(tripleLabel.length);
+              self.select.push(tripleLabel[2]);
+              self.optionals[0].push(tripleLabel);
+              */
+              q = self.get();
+              //alert(q);
+              req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+                if (datas.results.bindings.length > 0){
+                  recursoObj.variable.recommends.push(x);
+                }
+              }});
+            }); //for + break
+          } 
+        }});
+      });//for + break
+      /*
+      var varRecommend = new RDFResource();
+      var varAux = new RDFResource();
+      tripleArreglar[2] = varRecommend;
+
+      self.select.push(varRecommend);
+      self.select.push(varAux);
+
+      newsTriple = []
+      //newsTriple.push([createInstanceOfTriple(recursoObj, varRecommend)]);
+      //newsTriple.push([createSubClassTriple(recursoObj, varRecommend)]);
+
+      for(var i=0; i< newsTriple.length; i++){
+        t = newsTriple[i];
+        self.triples = self.triplesCopy.slice();
+        self.optionals[0] = self.optionalsCopy[0].slice();
+        self.select = self.selectCopy.slice();
+        self.select.push(varRecommend);
+        self.select.push(varAux);
+        t.forEach(t => {self.triples.push(t)});
+        var tripleLabel = self.createTripleLabel(varRecommend);
+        self.select.push(tripleLabel[2]);
+        self.optionals[0].push(tripleLabel);
+        
+        q = self.get();
+        req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var name = varRecommend.variable.getName();
+            var possibleResource = [];
+            var values = new Set();
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            possibleResource.forEach(r => {recursoObj.variable.recommends.push(r)});
+          }
+        }});
+        self.limit = 10;
+        if(recursoObj.variable.recommends.length > 10) break;
+      }
+      newsTriple = [];
+      //newsTriple.push([createTriple(varRecommend, varAux, recursoObj)]);
+
+      self.limit = 100;
+
+      for(var i=0; i< newsTriple.length; i++){
+        t = newsTriple[i];
+        self.triples = self.triplesCopy.slice();
+        self.optionals[0] = self.optionalsCopy[0].slice();
+        self.select = self.selectCopy.slice();
+        self.select.push(varRecommend);
+        self.select.push(varAux);
+        t.forEach(t => {self.triples.push(t)});
+        var tripleLabel = self.createTripleLabel(varRecommend);
+        self.select.push(tripleLabel[2]);
+        self.optionals[0].push(tripleLabel);
+        
+        q = self.get();
+        //alert(q);
+        req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var filtros = ["http://www.wikidata.org/prop/direct/P279","http://www.wikidata.org/prop/direct/P361","http://www.wikidata.org/prop/direct/P527"];
+            for(var j=0; j< filtros.length; j++){
+              var name = varRecommend.variable.getName();
+              var possibleResource = [];
+              var values = new Set();
+              var dataRelate =[];
+              dataRelate = datas;
+              dataRelate = datas.results.bindings.filter(d => (d[varAux.variable.id].value == filtros[j]));
+              possibleResource = dataRelate.filter(d => { return d[name]}).map(d => { return d[name]; });
+              possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+              possibleResource.forEach(r => {recursoObj.variable.recommends.push(r)});
+              if(recursoObj.variable.recommends.length > 10) break;
+            }
+          }
+        }});
+        self.limit = 10;
+        if(recursoObj.variable.recommends.length > 10) break;
+      }
+      */
+      self.triples = self.triplesCopy.slice();
+      tripleArreglar[2] = recursoObj;  
+
+    } else if(caso == 2 ){ //?x p ?z
+      alert("Se recomienda modificar " + tripleArreglar[1].getUri().getLabel() + " en triple " + textoTriple);
+      var recursoObj = tripleArreglar[1];
+      var queries = [];
+      recursoObj.variable.recommends = [];
+      //se agregan las queries a ejecutar para obtener posibles reemplazos 
+      queries.push(getSuperProp(recursoObj.getUri()));
+      queries.push(getSubProp(recursoObj.getUri()));
+
+      var posibleRecommend = new RDFResource();
+      posibleRecommend.isVar = false;
+      posibleRecommend.cur = 0;
+      
+      queries.forEach(querieText => {  
+        req.execQuery(querieText, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var values = new Set();
+            var possibleResource = [];
+            var name = 'v';
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            posibleRecommend.uris =[];
+            posibleRecommend.uris.push(possibleResource[0].value);
+            
+            //Por cada posible recomendacion, se modifica la consulta y se comprueba si entrega resultados
+            possibleResource.forEach(x => {
+              posibleRecommend.uris[0] = x.value;
+              tripleArreglar[1] = posibleRecommend;
               q = self.get();
               req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
                 if (datas.results.bindings.length > 0){
@@ -1094,11 +1247,360 @@ Query.prototype.generateRecommendation = function (config) {
           } 
         }});
       });
+    } else if(caso == 3){ //?x p o
+      alert("Se recomienda modificar " + tripleArreglar[1].getUri().getLabel() + ' o ' + tripleArreglar[2].getUri().getLabel()+ " en triple " + textoTriple );
+      //o
+      var recursoObj = tripleArreglar[2];
+      var queries = [];
+      recursoObj.variable.recommends = [];
+      
+      queries.push(getSuperClasses(recursoObj.getUri()));
+      queries.push(getSubClasses(recursoObj.getUri()));
+      queries.push(getInstanceOf(recursoObj.getUri()));
+      queries.push(getHasPart(recursoObj.getUri()));
+      queries.push(getPartOf(recursoObj.getUri()));
+      queries.push(getNeighborsClass(recursoObj.getUri()));
+
+      var posibleRecommend = new RDFResource();
+      posibleRecommend.isVar = false;
+      posibleRecommend.cur = 0;
+      
+      queries.forEach(querieText => {  
+        req.execQuery(querieText, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var values = new Set();
+            var possibleResource = [];
+            var name = 'v';
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            posibleRecommend.uris =[];
+            posibleRecommend.uris.push(possibleResource[0].value);
+            
+            //Por cada posible recomendacion, se modifica la consulta y se comprueba si entrega resultados
+            possibleResource.forEach(x => {
+              posibleRecommend.uris[0] = x.value;
+              tripleArreglar[2] = posibleRecommend;
+
+              /*var tripleLabel = self.createTripleLabel(posibleRecommend);
+              alert(tripleLabel.length);
+              self.select.push(tripleLabel[2]);
+              self.optionals[0].push(tripleLabel);
+              */
+              q = self.get();
+              //alert(q);
+              req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+                if (datas.results.bindings.length > 0){
+                  recursoObj.variable.recommends.push(x);
+                }
+              }});
+            });
+          } 
+        }});
+      });
+      self.triples = self.triplesCopy.slice();
+      tripleArreglar[2] = recursoObj;        
+      //p
+      recursoObj = tripleArreglar[1];
+      queries = [];
+      recursoObj.variable.recommends = [];
+      queries.push(getSuperProp(recursoObj.getUri()));
+      queries.push(getSubProp(recursoObj.getUri()));
+      posibleRecommend = new RDFResource();
+      posibleRecommend.isVar = false;
+      posibleRecommend.cur = 0;    
+      queries.forEach(querieText => {  
+        req.execQuery(querieText, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var values = new Set();
+            var possibleResource = [];
+            var name = 'v';
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            posibleRecommend.uris =[];
+            posibleRecommend.uris.push(possibleResource[0].value);     
+            //Por cada posible recomendacion, se modifica la consulta y se comprueba si entrega resultados
+            possibleResource.forEach(x => {
+              posibleRecommend.uris[0] = x.value;
+              tripleArreglar[1] = posibleRecommend;
+              q = self.get();
+              req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+                if (datas.results.bindings.length > 0){
+                  recursoObj.variable.recommends.push(x);
+                }
+              }});
+            });
+          } 
+        }});
+      });
+    }else if(caso == 4){ // s ?y ?z
+      alert("Se recomienda eliminar el triple: "+
+        tripleArreglar.map(r => {
+          if (r.isVariable()) return r.variable;
+          else {
+            return r.getUri().getLabel();
+          }
+        }).join(' ')
+    );
+    } else if (caso == 5){  // s ?x o
+      alert("Se recomienda modificar " + tripleArreglar[2].getUri().getLabel() + " en triple " + textoTriple);
+      var recursoObj = tripleArreglar[2];
+      var queries = [];
+      recursoObj.variable.recommends = [];
+
+      var varRecommend = new RDFResource();
+      var varAux = new RDFResource();
+      tripleArreglar[2] = varRecommend;
+      self.select.push(varRecommend);
+
+      newsTriple = []
+      newsTriple.push([createTriple(varRecommend, varAux, recursoObj)]);
+      newsTriple.push([createTriple(recursoObj, varAux, varRecommend)]);
+      newsTriple.push([createInstanceOfTriple(recursoObj, varRecommend)]);
+      newsTriple.push([createInstanceOfTriple(recursoObj, varAux), createInstanceOfTriple(varRecommend, varAux)]) //vecinos instancia
+      newsTriple.push([createSubClassTriple(recursoObj, varAux), createSubClassTriple(varRecommend, varAux)]) //vecinos subclase
+
+      for(var i=0; i< newsTriple.length; i++){
+        t = newsTriple[i];
+        self.triples = self.triplesCopy.slice();
+        self.optionals[0] = self.optionalsCopy[0].slice();
+        self.select = self.selectCopy.slice();
+        self.select.push(varRecommend);
+        self.select.push(varAux);
+        t.forEach(t => {self.triples.push(t)});
+        var tripleLabel = self.createTripleLabel(varRecommend);
+        self.select.push(tripleLabel[2]);
+        self.optionals[0].push(tripleLabel);
+        
+        q = self.get();
+        req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var name = varRecommend.variable.getName();
+            var possibleResource = [];
+            var values = new Set();
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            possibleResource.forEach(r => {recursoObj.variable.recommends.push(r)});
+          }
+        }});
+        if(recursoObj.variable.recommends > 10) break;
+      }
+      self.triples = self.triplesCopy.slice();
+      tripleArreglar[2] = recursoObj;  
+
+    } else if (caso==6){ // s p ?z
+      alert("Se recomienda modificar " + tripleArreglar[1].getUri().getLabel() + " en triple " + textoTriple);
+      var recursoObj = tripleArreglar[1];
+      recursoObj.variable.recommends = [];
+      var varRecommend = new RDFResource();
+      var varAux1 = new RDFResource();
+      var varAux2 = new RDFResource();
+      var varAux3 = new RDFResource();
+      var varAux4 = new RDFResource();
+      tripleArreglar[1] = varRecommend;
+      self.select.push(varRecommend);
+
+      newsTriple = []
+      newsTriple.push([createDirectClaim(varAux1, recursoObj), createTriple(varAux2, varAux3, varAux1), createDirectClaim(varAux2, varRecommend)]);
+      newsTriple.push([createDirectClaim(varAux1, recursoObj), createTriple(varAux1, varAux3, varAux2), createDirectClaim(varAux2, varRecommend)]);
+      newsTriple.push([createDirectClaim(varAux1, recursoObj), createSubPropTriple(varAux1, varAux4), createSubPropTriple(varAux2, varAux4), createDirectClaim(varAux2, varRecommend)]);
+
+      for(var i=0; i< newsTriple.length; i++){
+        t = newsTriple[i];
+        self.triples = self.triplesCopy.slice();
+        self.optionals[0] = self.optionalsCopy[0].slice();
+        self.select = self.selectCopy.slice();
+        self.select.push(varRecommend);
+        self.select.push(varAux);
+        t.forEach(t => {self.triples.push(t)});
+        var tripleLabel = self.createTripleLabel(varRecommend);
+        self.select.push(tripleLabel[2]);
+        self.optionals[0].push(tripleLabel);
+        
+        q = self.get();
+        req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var name = varRecommend.variable.getName();
+            var possibleResource = [];
+            var values = new Set();
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            possibleResource.forEach(r => {recursoObj.variable.recommends.push(r)});
+          }
+        }});
+        if(recursoObj.variable.recommends > 10) break;
+      }
+      self.triples = self.triplesCopy.slice();
+      tripleArreglar[1] = recursoObj;  
+
+    } else if (caso == 7) { // s p o
+      alert("Se recomienda modificar " + tripleArreglar[1].getUri().getLabel() + ' o ' + tripleArreglar[2].getUri().getLabel()+ " en triple " + textoTriple );
+      var recursoObj = tripleArreglar[2];
+      var queries = [];
+      recursoObj.variable.recommends = [];
+
+      var varRecommend = new RDFResource();
+      var varAux = new RDFResource();
+      tripleArreglar[2] = varRecommend;
+      self.select.push(varRecommend);
+
+      newsTriple = []
+      newsTriple.push([createTriple(varRecommend, varAux, recursoObj)]);
+      newsTriple.push([createTriple(recursoObj, varAux, varRecommend)]);
+      newsTriple.push([createInstanceOfTriple(recursoObj, varRecommend)]);
+      newsTriple.push([createInstanceOfTriple(recursoObj, varAux), createInstanceOfTriple(varRecommend, varAux)]) //vecinos instancia
+      newsTriple.push([createSubClassTriple(recursoObj, varAux), createSubClassTriple(varRecommend, varAux)]) //vecinos subclase
+
+      for(var i=0; i< newsTriple.length; i++){
+        t = newsTriple[i];
+        self.triples = self.triplesCopy.slice();
+
+        t.forEach(t => {self.triples.push(t)});
+        q = self.get();
+        req.execQuery(q, { canceller: cfg.canceller, callback: datas => {
+          if (datas.results.bindings.length > 0) {
+            var name = varRecommend.variable.getName();
+            var possibleResource = [];
+            var values = new Set();
+            possibleResource = datas.results.bindings.filter(d => { return d[name]}).map(d => { return d[name]; });
+            possibleResource = possibleResource.filter(d => { return (!values.has(d.value) && values.add(d.value))});
+            possibleResource.forEach(r => {recursoObj.variable.recommends.push(r)});
+          }
+        }});
+        if(recursoObj.variable.recommends > 10) break;
+      }
+      self.triples = self.triplesCopy.slice();
+      tripleArreglar[2] = recursoObj;  
+
     }
     this.triples = this.triplesCopy;
     this.q = this.qCopy;
+    this.select = this.selectCopy;
   }
 
+  function createInstanceOfTriple(recurso1, recurso2) {
+    var varInstanceOf= new RDFResource();
+    varInstanceOf.isVar = false;
+    varInstanceOf.cur = 0;
+    varInstanceOf.uris =['http://www.wikidata.org/prop/direct/P31'];
+    return [recurso1, varInstanceOf, recurso2];
+  }
+  function createSubClassTriple(recurso1, recurso2){
+    var varSubClass= new RDFResource();
+    varSubClass.isVar = false;
+    varSubClass.cur = 0;
+    varSubClass.uris =['http://www.wikidata.org/prop/direct/P279'];
+    return [recurso1, varSubClass, recurso2];
+  }
+  function createHasPartTriple(recurso1, recurso2){
+    var varSubClass= new RDFResource();
+    varSubClass.isVar = false;
+    varSubClass.cur = 0;
+    varSubClass.uris =['http://www.wikidata.org/prop/direct/P527'];
+    return [recurso1, varSubClass, recurso2];
+  }
+  function createDirectClaim(sujeto, objeto){
+    var predicado= new RDFResource();
+    predicado.isVar = false;
+    predicado.cur = 0;
+    predicado.uris =['http://wikiba.se/ontology#directClaim'];
+    return [sujeto, predicado, objeto];
+  }
+  function createSubPropTriple(recurso1, recurso2){
+    var varSubClass= new RDFResource();
+    varSubClass.isVar = false;
+    varSubClass.cur = 0;
+    varSubClass.uris =['http://www.wikidata.org/prop/direct/P1647'];
+    return [recurso1, varSubClass, recurso2];
+  }
+  function createTriple(recurso1, recurso2, recurso3){
+    return [recurso1, recurso2, recurso3];
+  }
+
+  function getSuperProp(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+            'SELECT DISTINCT ?v WHERE {\n' +
+            '?var1 <http://wikiba.se/ontology#directClaim> <' + uri + '> .\n' +  
+            '?var1 wdt:P1647 ?var2 . \n' +
+            '?var2 <http://wikiba.se/ontology#directClaim> ?v \n' +
+           '}';
+  }
+  function getSubProp(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+            'SELECT DISTINCT ?v WHERE {\n' +
+            '?var1 <http://wikiba.se/ontology#directClaim> <' + uri + '> .\n' +  
+            '?var2  wdt:P1647 ?var1 . \n' +
+            '?var2 <http://wikiba.se/ontology#directClaim> ?v \n' +
+           '}';
+  }
+  function getSuperClasses(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+          'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+            'SELECT DISTINCT ?v ?vLabel WHERE {\n' +
+            ' <' + uri +'> wdt:P279 ?v .\n' +
+            'OPTIONAL { \n' +
+              '?v rdfs:label ?vLabel . \n' +
+              'FILTER (lang(?vLabel) = "en") \n' +
+            '} \n' +
+           '}';
+  }
+  function getSubClasses(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+            'SELECT DISTINCT ?v ?vLabel WHERE {\n' +
+            ' ?v wdt:P279 <' + uri +'> . \n' +
+            'OPTIONAL { \n' +
+              '?v rdfs:label ?vLabel . \n' +
+              'FILTER (lang(?vLabel) = "en") \n' +
+            '} \n' +
+           '}';
+  }
+  function getInstanceOf(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+           'SELECT DISTINCT ?v ?vLabel WHERE {\n' +
+           '<' + uri + '> wdt:P31 ?v . \n' +
+            'OPTIONAL { \n' +
+              '?v rdfs:label ?vLabel . \n' +
+              'FILTER (lang(?vLabel) = "en") \n' +
+            '} \n' +
+           '}';
+  }
+  function getHasPart(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+           'SELECT DISTINCT ?v ?vLabel WHERE {\n' +
+           '<' + uri + '> wdt:P527 ?v .\n' +
+            'OPTIONAL { \n' +
+              '?v rdfs:label ?vLabel . \n' +
+              'FILTER (lang(?vLabel) = "en") \n' +
+            '} \n' +
+           '}';
+  }
+  function getPartOf(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+           'SELECT DISTINCT ?v ?vLabel WHERE {\n' +
+           '<' + uri + '> wdt:P361 ?v .\n' +
+            'OPTIONAL { \n' +
+              '?v rdfs:label ?vLabel . \n' +
+              'FILTER (lang(?vLabel) = "en") \n' +
+            '} \n' +
+           '}';
+  }
+  function getNeighborsClass(uri) {
+    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
+            'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n' +
+           'SELECT DISTINCT ?v ?vLabel WHERE {\n' +
+           '<' + uri + '> wdt:P279 ?aux .\n' +
+           '?v wdt:P279 ?aux .\n' +
+            'OPTIONAL { \n' +
+              '?v rdfs:label ?vLabel . \n' +
+              'FILTER (lang(?vLabel) = "en") \n' +
+            '} \n' +
+           '}';
+  }
   function getCase(triple) {
     if (triple[0].isVariable()){
       if(triple[1].isVariable()){
@@ -1130,37 +1632,5 @@ Query.prototype.generateRecommendation = function (config) {
       }
     }
   }
-
-  function getSuperClasses(uri) {
-    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
-            'SELECT DISTINCT ?v WHERE {\n' +
-            ' <' + uri +'> wdt:P279 ?v \n' +
-           '}';
-  }
-  function getSubClasses(uri) {
-    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
-            'SELECT DISTINCT ?v WHERE {\n' +
-            ' ?v wdt:P279 <' + uri +'> \n' +
-           '}';
-  }
-  function getInstanceOf(uri) {
-    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
-           'SELECT DISTINCT ?v WHERE {\n' +
-           '<' + uri + '> wdt:P31 ?v\n' +
-           '}';
-  }
-  function getEquivalentClass(uri) {
-    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
-           'SELECT DISTINCT ?v WHERE {\n' +
-           '<' + uri + '> wdt:P1709 ?v\n' +
-           '}';
-  }
-  function getExactMatch(uri) {
-    return 'PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n' +
-           'SELECT DISTINCT ?v WHERE {\n' +
-           '<' + uri + '> wdt:P2888 ?v\n' +
-           '}';
-  }
-
   return propertyGraph;
 }

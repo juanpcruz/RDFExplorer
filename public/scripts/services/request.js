@@ -22,7 +22,7 @@ function requestService (settings, $http, $timeout) {
     "http://www.wikidata.org/entity/Q37033":      "World Wide Web Consortium",
     "http://www.wikidata.org/entity/Q14818032":   "cell proliferation",
   };
-  var delay = 100;   //delay between concurrent request
+  var delay = 10;   //delay between concurrent request
   var running = 0;  //number of concurrent request
 
   /* Create get URL form */
